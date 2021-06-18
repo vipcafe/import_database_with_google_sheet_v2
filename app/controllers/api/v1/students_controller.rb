@@ -1,27 +1,24 @@
 class Api::V1::StudentsController < ApplicationController
-  def add_data_to_database
-    #gọi class để config tới google_sheet
-    get_sheet = AddDataGoogleSheetToDatabase.new.worksheet(params[:sheet_id])
-
-    config_sheet = get_sheet
-
+  def create
     red = GoogleDrive::Worksheet::Colors::RED
     green = GoogleDrive::Worksheet::Colors::GREEN
     orange = GoogleDrive::Worksheet::Colors::ORANGE
+    #connect to google sheets
+    config_sheet = AddDataGoogleSheetToDatabase.new.worksheet(params[:sheet_id])
 
-    #kiểm tra có kết nối đc đến link google sheet hay không nếu không đc báo 403
-    if get_sheet.nil?
+    #check if it can connect to google sheet link if not output 404 message
+    if config_sheet.nil?
       return render json: {
-                      error: 403,
+                      error: 404,
                       messenge: "please add email : googlesheetapi@connecticapi.iam.gserviceaccount.com  -> add share of the google sheet",
                     }
     end
 
-    #get toàn bộ data của google_sheet và trả về 1 mảng với lệnh .rows
-    get_sheet = get_sheet.rows
+    #get all data of google_sheet with a command return a array with .rows
+    get_sheet = config_sheet.rows
     count_rows = get_sheet.count
 
-    #check các dòng rỗng không đúng kiểu data
+    #check blank lines in google sheet and notification error for user
     check_blank = check_blank_data(count_rows, get_sheet)
     if check_blank && check_blank != ""
       return render json: {
@@ -29,44 +26,41 @@ class Api::V1::StudentsController < ApplicationController
                     }
     end
 
-    student_data = Student.all
+    count_create = 0
+    count_update = 0
+    count_already_exist = 0
 
-    #sữ dụng vòng lặp để truyền data vào database
-    count_rows.times do |i|
-      puts i
-      if i == 0
-        next
-      end
-      if student_data.find_by_student_code(get_sheet[i][1]).nil?
-        #tách từng phần tử của mảng truyền vào database
-        student_data = Student.new student_code: get_sheet[i][1],
-                                   full_name: get_sheet[i][2],
-                                   email: get_sheet[i][3],
-                                   address: get_sheet[i][4],
-                                   date_of_birth: get_sheet[i][5],
-                                   phone_number: get_sheet[i][6]
-        student_data.save
+    #improt data google sheet --> database
+    get_sheet.each_with_index do |data, i|
+      next if i == 0
+
+      if Student.find_by_student_code(data[1]).nil?
+        create_student(data)
         config_sheet[i + 1, 8] = "Create"
-        background_color_create(config_sheet, i + 1, red)
-        config_sheet.save
+        background_color_create(config_sheet, i + 1, 8, red)
+        count_create = count_create + 1
       else
-        student_update = student_data.find_by_student_code(get_sheet[i][1])
-        date_new = prefix_date(get_sheet[i][5])
+        student_update = Student.find_by_student_code(data[1])
+        # Date format used for comparison
+        date_new = prefix_date(data[5])
         date_old = student_update.date_of_birth.strftime("%d/%m/%Y")
 
-        if student_update.full_name === get_sheet[i][2] && student_update.email === get_sheet[i][3] && student_update.address === get_sheet[i][4] && date_new === date_old && student_update.phone_number === get_sheet[i][6]
-          background_color_create(config_sheet, i + 1, red)
-          config_sheet[i + 1, 8] = "Duplicate"
-          background_color_create(config_sheet, i + 1, orange)
-          config_sheet.save
+        #check and comparison data . 3 cases : Already exist , update , create
+        if student_update.full_name === data[2] && student_update.email === data[3] && student_update.address === data[4] && date_new === date_old && student_update.phone_number === data[6]
+          config_sheet[i + 1, 8] = "Already exist"
+          background_color_create(config_sheet, i + 1, 8, orange)
+          count_already_exist = count_already_exist + 1
         else
-          student_update.update(full_name: get_sheet[i][2], email: get_sheet[i][3], address: get_sheet[i][4], date_of_birth: get_sheet[i][5], phone_number: get_sheet[i][6])
+          update_student(student_update, data)
           config_sheet[i + 1, 8] = "Update"
-          background_color_create(config_sheet, i + 1, green)
-          config_sheet.save
+          background_color_create(config_sheet, i + 1, 8, green)
+          count_update = count_update + 1
         end
       end
     end
+
+    resul_create(config_sheet, count_create, count_update, count_already_exist)
+    config_sheet.save
 
     config_sheet.reload
     return render json: {
@@ -78,45 +72,60 @@ class Api::V1::StudentsController < ApplicationController
            }
   end
 
-  #chỉnh sữa màu sắc ô status
-  def background_color_create(worksheet, col, color_add)
-    worksheet.set_background_color(col, 8, 1, 1, color_add)
+  #edit background color of column in google sheet
+  def background_color_create(worksheet, row, column, color_add)
+    worksheet.set_background_color(row, column, 1, 1, color_add)
     worksheet.set_text_format(
-      col, 8, 1, 1,
+      row, column, 1, 1,
       bold: true,
       italic: true,
       foreground_color: GoogleDrive::Worksheet::Colors::WHITE,
     )
   end
 
-  #check cột rỗng và đưa ra lỗi
+  #funcion check blank line in google sheet
   def check_blank_data(count_rows, get_sheet)
     check_blank = ""
     count_col_blank = 0
 
-    count_rows.times do |i|
-      7.times do |j|
-        if j == 0
-          next
-        end
-        puts get_sheet[i][j]
-        if get_sheet[i][j].blank?
-          check_blank = check_blank + "line #{i + 1} not blank |  "
-          count_col_blank = count_col_blank + 1
-          break
-        else
-          count_col_blank = 0
-        end
+    get_sheet.each_with_index do |data, i|
+      check = data.first(7).detect { |x| x === "" }
+      if check === ""
+        check_blank = check_blank + "line #{i + 1} not blank |  "
+        count_col_blank = count_col_blank + 1
+      else
+        count_col_blank = 0
       end
 
       if count_col_blank === 2
         check_blank = check_blank + ".... | please check bug in line  #{count_rows}"
+        return check_blank
         break
       end
     end
     return check_blank
   end
 
+  def create_student(data)
+    student_new = Student.new student_code: data[1],
+                              full_name: data[2],
+                              email: data[3],
+                              address: data[4],
+                              date_of_birth: data[5],
+                              phone_number: data[6]
+
+    student_new.save
+  end
+
+  def update_student(student_update, data)
+    student_update.update(full_name: data[2],
+                          email: data[3],
+                          address: data[4],
+                          date_of_birth: data[5],
+                          phone_number: data[6])
+  end
+
+  #Date format
   def prefix_date(date)
     prefix = DateTime.strptime(date, "%d/%m/%Y").strftime("%d/%m/%Y")
 
@@ -125,5 +134,20 @@ class Api::V1::StudentsController < ApplicationController
     else
       return DateTime.strptime(date, "%d-%m-%Y").strftime("%d/%m/%Y")
     end
+  end
+
+  # Notification and prind resul
+  def resul_create(config_sheet, create, update, already_exist)
+    config_sheet[4, 10] = "Create"
+    config_sheet[5, 10] = create
+    background_color_create(config_sheet, 4, 10, GoogleDrive::Worksheet::Colors::RED)
+
+    config_sheet[6, 10] = "Update"
+    config_sheet[7, 10] = update
+    background_color_create(config_sheet, 6, 10, GoogleDrive::Worksheet::Colors::GREEN)
+
+    config_sheet[8, 10] = "Already exist"
+    config_sheet[9, 10] = already_exist
+    background_color_create(config_sheet, 8, 10, GoogleDrive::Worksheet::Colors::ORANGE)
   end
 end
