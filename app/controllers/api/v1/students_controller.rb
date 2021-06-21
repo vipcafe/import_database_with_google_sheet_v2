@@ -107,14 +107,12 @@ class Api::V1::StudentsController < ApplicationController
   end
 
   def create_student(data)
-    student_new = Student.new student_code: data[1],
-                              full_name: data[2],
-                              email: data[3],
-                              address: data[4],
-                              date_of_birth: data[5],
-                              phone_number: data[6]
-
-    student_new.save
+    student_new = Student.create student_code: data[1],
+                                 full_name: data[2],
+                                 email: data[3],
+                                 address: data[4],
+                                 date_of_birth: data[5],
+                                 phone_number: data[6]
   end
 
   def update_student(student_update, data)
