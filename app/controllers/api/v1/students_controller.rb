@@ -42,7 +42,8 @@ class Api::V1::StudentsController < ApplicationController
       else
         student_update = Student.find_by_student_code(data[1])
         # Date format used for comparison
-        date_new = prefix_date(data[5])
+
+        date_new = data[5].to_date.strftime("%d/%m/%Y")
         date_old = student_update.date_of_birth.strftime("%d/%m/%Y")
 
         #check and comparison data . 3 cases : Already exist , update , create
@@ -121,17 +122,6 @@ class Api::V1::StudentsController < ApplicationController
                           address: data[4],
                           date_of_birth: data[5],
                           phone_number: data[6])
-  end
-
-  #Date format
-  def prefix_date(date)
-    prefix = DateTime.strptime(date, "%d/%m/%Y").strftime("%d/%m/%Y")
-
-    if prefix
-      return prefix
-    else
-      return DateTime.strptime(date, "%d-%m-%Y").strftime("%d/%m/%Y")
-    end
   end
 
   # Notification and prind resul
